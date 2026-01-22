@@ -43,7 +43,7 @@ class Memory_buffer():
 
 def get_action(policy, x):
     y = policy.forward(x)
-    m = Categorical(y)
+    m = torch.distributions.Categorical(y)
     action = m.sample()
     action_prob = m.log_prob(action)
 
@@ -54,12 +54,12 @@ def get_action(policy, x):
 def update(policy, mem_buffer, **train_args):
     Gt = []
     R = 0
-    loss = 0
+    loss = []
 
-    eps = train_args.eps
-    gamma = train_args.gamma
-    optim = train_args.optim
-    lr = train_args.lr
+    eps = train_args['eps']
+    gamma = train_args['gamma']
+    optim = train_args['optim']
+    lr = train_args['lr']
 
 
     ## rewards list is [r_0, r_1, r_2, ...]
@@ -75,7 +75,7 @@ def update(policy, mem_buffer, **train_args):
     
     policy_loss = torch.cat(loss).sum()
 
-    optimizer = optim.Adam(policy.parameters(), lr)
+    optimizer = train_args['optim'](policy.parameters(), lr)
     optimizer.zero_grad()
     policy_loss.backward()
     optimizer.step()
@@ -83,12 +83,17 @@ def update(policy, mem_buffer, **train_args):
     mem_buffer.clean()
 
 
-episode_num = 
-state_size = 
-action_size = 
-hidden_state_size = 
 
-stop_step = 
+
+device = "cuda"
+
+
+episode_num = 10
+state_size = env_args["channel_num"]
+action_size = env_args["channel_num"]
+hidden_state_size = 64
+
+stop_step = 1000
 
 train_args = {
     'eps': 1e-5,
@@ -97,20 +102,34 @@ train_args = {
     'lr': 0.001,
 }
 
-policy = Policy(state_size, action_size, hidden_state_size)
-optim = 
+
+env_args = {
+    "channel_num": 5,
+    "channel_pos": [0.2, 0.4, 0.5, 0.6, 0.9],
+    "branch_width": 3.0,
+    "main_road_width": 5.0,
+    "wall_height": 1.0,
+    "gate_thickness": 0.5,
+    "channel_state": [True, False, True, True, False],
+    "x_max": 200,
+    "y_max": 30
+}
+
+policy = Policy(state_size, action_size, hidden_state_size).to(device)
 
 for ii in range(episode_num):
-    set_env()
-    state = env.set()
+    env = Water_Distribution("sim_save", **env_args)
+    state = torch.rand(env_args["channel_num"]).to(device) * 10
     buffer = Memory_buffer()
     for ii in range(stop_step):
         action, action_log_prob = get_action(policy, state)
-        reward, next_state, done = env.step(action, ii)
+        action = torch.tensor(action).to(device)
+        state = torch.tensor(state).to(device)
+        reward, next_state, done = env.step(action, state, ii)
         buffer.push([reward, action_log_prob])
         
         update(policy, buffer, **train_args)
-           
+
         state = next_state
 
         if done:
