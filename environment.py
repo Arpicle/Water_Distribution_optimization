@@ -17,14 +17,31 @@ class Water_Distribution():
         self.channel_state = [True if x == 1 else False for x in action]
         add_water = self.step_sim()
         diff = (state - add_water)
-        reward = -(diff/state) ** 2 * (1 + 0.1*step_num)
+        reward = -(diff) ** 2 
 
         next_state = diff
-        if (next_state < 0).any():
+        if (next_state < 0).all():
             done = True
         else:
             done = False
-        return reward, next_state, done
+        return next_state, reward, done, done
+
+    def reset(self, sim_name, **kwargs):
+        self.channel_num = kwargs.get('channel_num', 0)
+        self.channel_pos = kwargs.get('channel_pos', [])
+        self.branch_width = kwargs.get('branch_width', 1.0)
+        self.main_road_width = kwargs.get('main_road_width', 2.0)
+        self.wall_height = kwargs.get('wall_height', 0.5)
+        self.gate_thickness = kwargs.get('gate_thickness', 0.5)
+        self.channel_state = kwargs.get('channel_state', [])
+        self.x_max = kwargs.get('x_max', 200)
+        self.y_max = kwargs.get('y_max', 100)
+        self.sim_name = sim_name
+
+    def close(self):
+        pass
+
+    
 
     
     def step_sim(self):
@@ -48,13 +65,11 @@ class Water_Distribution():
 
 
 
-    def calculate_elevation(self, x, y, channel_num, channel_pos, channel_state, branch_width, main_road_width, gate_thickness, wall_height, **kwargs):
-        # --- 内部参数设置 ---
+    def calculate_elevation(x, y, channel_num, channel_pos, channel_state, branch_width, main_road_width, gate_thickness, wall_height, **kwargs):
+        # --- 参数映射 ---
         num_junctions = channel_num
-        junction_positions = channel_pos  # 支路在主轴的位置比例
-        branch_active = channel_state   # 支路状态：True为开启，False为关闭
-        
-        # --------------------
+        junction_positions = channel_pos  
+        branch_active = channel_state    
 
         z = np.zeros_like(x)
         
@@ -68,11 +83,11 @@ class Water_Distribution():
         main_top = mid_y + main_road_width / 2
 
         for i in range(len(x)):
-            # 1. 基础判断：是否在主干道内
+            # 1. 基础判断：是否在主轴内（主干道永远是通路）
             is_on_main_road = (main_bottom <= y[i] <= main_top)
             
-            is_on_open_branch = False
-            is_on_closed_branch_but_blocked = False
+            is_on_passable_branch = False
+            is_blocked_by_wall = False
             
             for idx in range(num_junctions):
                 pos_ratio = junction_positions[idx]
@@ -81,43 +96,47 @@ class Water_Distribution():
                 
                 # 判断坐标是否在当前支路的宽度范围内
                 in_branch_x_range = (branch_center_x - branch_width/2 <= x[i] <= branch_center_x + branch_width/2)
-                # 支路在主干道下方
+                # 支路在主干道下方 (y轴较小的一侧)
                 in_branch_y_range = (y[i] < main_bottom)
                 
                 if in_branch_x_range and in_branch_y_range:
                     if is_active:
-                        # 如果支路是开的，标记为通路
-                        is_on_open_branch = True
+                        # 开启状态：支路全线通路
+                        is_on_passable_branch = True
                     else:
-                        # 如果支路是关的
-                        # 检查是否处于“门口”位置（靠近主干道边缘的厚度区域）
-                        # 门口范围：从主干道边缘向下延伸 gate_thickness 的距离
-                        if y[i] >= (main_bottom - gate_thickness):
-                            is_on_closed_branch_but_blocked = True
+                        # 关闭状态：执行“两头封堵”逻辑
+                        # A. 检查路口门 (靠近主干道边缘)
+                        is_at_gate = (y[i] >= main_bottom - gate_thickness)
+                        # B. 检查支路底部 (靠近 y_min 边缘)
+                        is_at_bottom_wall = (y[i] <= y_min + gate_thickness)
+                        
+                        if is_at_gate or is_at_bottom_wall:
+                            is_blocked_by_wall = True
                         else:
-                            # 门后的支路空间仍视为通路（或者你也可以设为全是墙，这里设为通路）
-                            is_on_open_branch = True
+                            # 门和底墙之间的区域仍然是平地 (路面)
+                            is_on_passable_branch = True
 
-            # 2. 最终高度判定逻辑
-            # 如果在主轴上，或者是开启的支路，高度为0
-            if is_on_main_road or is_on_open_branch:
+            # 2. 最终高度判定
+            # 通路条件：在主干道上 OR 在开启/未被封堵的支路段上
+            # 且 必须没有被特定的“门”或“底墙”挡住
+            if (is_on_main_road or is_on_passable_branch) and not is_blocked_by_wall:
                 z[i] = 0
             else:
-                # 其他地方（野外、封闭的路口、支路间的空隙）全是墙
                 z[i] = wall_height
                 
         return z
 
 
-    def simulation(self, sim_name, channel_num, channel_pos, branch_width, main_road_width, wall_height, gate_thickness, x_max, y_max, channel_state, debug=False):
+    # def simulation(self, sim_name, channel_num, channel_pos, branch_width, main_road_width, wall_height, gate_thickness, x_max, y_max, channel_state, debug=False):
+    def simulation(self, debug=False):
         
         script_path = os.path.abspath(__file__)
         file_path = os.path.join(os.path.dirname(script_path), sim_name + ".sww")
         if os.path.exists(file_path):
             os.remove(file_path)
         
-        domain = anuga.rectangular_cross_domain(400, 40, len1=x_max, len2=y_max)
-        domain.set_name(sim_name)
+        domain = anuga.rectangular_cross_domain(400, 40, len1=self.x_max, len2=self.y_max)
+        domain.set_name(self.sim_name)
 
         if debug == True:
             rc('animation', html='jshtml')
@@ -134,13 +153,13 @@ class Water_Distribution():
         # 使用 lambda 表达式将参数注入到函数中，同时保持接口为 (x, y)
         # 构造参数字典
         params = {
-            'channel_num': channel_num,
-            'channel_pos': channel_pos,
-            'channel_state': channel_state,
-            'branch_width': branch_width,
-            'main_road_width': main_road_width,
-            'gate_thickness': gate_thickness,
-            'wall_height': wall_height
+            'channel_num': self.channel_num,
+            'channel_pos': self.channel_pos,
+            'channel_state': self.channel_state,
+            'branch_width': self.branch_width,
+            'main_road_width': self.main_road_width,
+            'gate_thickness': self.gate_thickness,
+            'wall_height': self.wall_height
         }
         
         topography = lambda x, y: calculate_elevation(x, y, **params)
@@ -164,10 +183,10 @@ class Water_Distribution():
         ##-----------------------------------------------------------------------
         
         Bi = anuga.Dirichlet_boundary([1.3, 0, 0])         # Inflow
-        Bo = anuga.Dirichlet_boundary([-2, 0, 0])          # Outflow
+        Bo = anuga.Dirichlet_boundary([0.1, 0, 0])          # Outflow
         Br = anuga.Reflective_boundary(domain)            # Solid reflective wall
         
-        domain.set_boundary({'left': Bi, 'right': Br, 'top': Br, 'bottom': Br})
+        domain.set_boundary({'left': Bi, 'right': Bo, 'top': Br, 'bottom': Br})
         
         ##-----------------------------------------------------------------------
         ## Evolve system through time
