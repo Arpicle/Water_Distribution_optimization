@@ -1,9 +1,6 @@
 import os
-import sys
-import subprocess
 import anuga
 import numpy as np
-import glob
 
 class Water_Distribution():
     def __init__(self, sim_name, **kwargs):
@@ -16,19 +13,15 @@ class Water_Distribution():
         self.channel_state = kwargs.get('channel_state', [])
         self.x_max = kwargs.get('x_max', 200)
         self.y_max = kwargs.get('y_max', 100)
-        self.parallel = kwargs.get('parallel', 0)
         self.sim_name = sim_name
         self.script_path = kwargs.get('script_path', ".")
 
 
-    def step(self, action):
+    def step(self, action, state, step_num):
         # Convert 1/0 integers to boolean True/False
-        action = [int(x) for x in action.squeeze(0).tolist()]
-        print(action)
-        # self.channel_state = [True if x == 1 else False for x in action]
-        self.channel_state = action
+        self.channel_state = [True if x == 1 else False for x in action]
         add_water = self.step_sim()
-        diff = (self.state - add_water)
+        diff = (state - add_water)
         reward = -(diff) ** 2 
 
         next_state = diff
@@ -36,8 +29,6 @@ class Water_Distribution():
             done = True
         else:
             done = False
-        
-        self.state = next_state
         return next_state, reward, done, done
 
     def reset(self, **kwargs):
@@ -50,13 +41,8 @@ class Water_Distribution():
         self.channel_state = kwargs.get('channel_state', [])
         self.x_max = kwargs.get('x_max', 200)
         self.y_max = kwargs.get('y_max', 100)
-        self.parallel = kwargs.get('parallel', 0)
         self.sim_name = kwargs.get('sim_name', "temp")
         self.script_path = kwargs.get('script_path', ".")
-
-        max_val = kwargs.get('water_requirement', 100)
-        self.state = np.random.uniform(0, max_val, self.channel_num)
-        return self.state, 0
 
     def close(self):
         pass
@@ -69,51 +55,7 @@ class Water_Distribution():
             print("BAD CONSTRUCTION!")
             return 0
 
-        if self.parallel == 0:
-            #tag = self.simulation(self.sim_name, self.channel_num, self.channel_pos, self.branch_width, self.main_road_width, self.wall_height, self.gate_thickness, self.x_max, self.y_max, self.channel_state)
-            tag = self.simulation()
-        else:
-            script_path = self.script_path
-            # file_path = os.path.join(os.path.dirname(script_path), self.sim_name + ".sww")
-            path = os.path.dirname(script_path)
-
-
-            for f in glob.glob(os.path.join(path, "*.sww")):
-                os.remove(f)
-            # print(file_path)
-            # if os.path.exists(file_path):
-            #     os.remove(file_path)
-            
-            
-            custom_args = [
-                "--channel_num", str(self.channel_num), 
-                "--channel_pos", *map(str, self.channel_pos),
-                "--channel_state", *map(str, self.channel_state),
-                "--branch_width", str(self.branch_width),
-                "--main_road_width", str(self.main_road_width),
-                "--wall_height", str(self.wall_height),
-                "--gate_thickness", str(self.gate_thickness),
-                "--x_max", str(self.x_max),
-                "--y_max", str(self.y_max),
-                "--sim_name", self.sim_name,
-                ]
-            
-            command = [
-                "mpirun", 
-                "--allow-run-as-root",
-                "-np", str(self.parallel), 
-                sys.executable, 
-                os.path.join(os.path.dirname(os.path.abspath(__file__)), "simulation_parallel.py")
-            ] + custom_args
-
-
-            my_env = os.environ.copy()
-            # my_env["OMP_NUM_THREADS"] = "1" 
-            # my_env["MKL_NUM_THREADS"] = "1"
-
-            pstatus = subprocess.run(command, check=True, env=my_env, stderr=subprocess.DEVNULL)
-
-            # print(f"parallel status: {pstatus}")
+        tag = self.simulation(self.sim_name, self.channel_num, self.channel_pos, self.branch_width, self.main_road_width, self.wall_height, self.gate_thickness, self.x_max, self.y_max, self.channel_state, debug=False)
 
         gate_pos = self.get_gate_locations(channel_num=self.channel_num, channel_pos=self.channel_pos, branch_width=self.branch_width, main_road_width=self.main_road_width, gate_thickness=self.gate_thickness, x_max=self.x_max, y_max=self.y_max)
 
@@ -268,9 +210,8 @@ class Water_Distribution():
 
         for t in domain.evolve(yieldstep=2, duration=50):
         
-            # domain.save_depth_frame(vmin=0.0,vmax=1.0)
+            domain.save_depth_frame(vmin=0.0,vmax=1.0)
             if debug == True:
-                domain.save_depth_frame(vmin=0.0,vmax=1.0)
                 domain.print_timestepping_statistics()
         
         # Read in the png files stored during the evolve loop
